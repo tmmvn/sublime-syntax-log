@@ -15,74 +15,48 @@ import traceback
 import plistlib
 import shutil
 
-##  import Guna  ______________________________________________
-
-try:
-    from Guna.core.api import GunaApi
-    guna_installed = True
-except Exception:
-    guna_installed = False
-
-# package control
-try:
-    from package_control import events
-    package_control_installed = True
-except Exception:
-    package_control_installed = False
-
-##  global constants / variables  _____________________________
-
-# sublime text version
-STV = int(sublime.version())
 
 # relative path searching
 MAX_SCAN_PATH     = 1000
 MAX_STAIR_UP_PATH = 10
-
 # refresh delay
 REFRESH_WAIT = 500  # 0.5s
-
 # to handle extension
 EXT_ALL = []
 EXT_DIC = {}
 OUT_DIC = {}
+# regular expresson constants
+LINK_REGX_PLIST    = r"""["']?[\w\d\:\\\/\.\-\=]+\.\w+[\w\d]*["']?\s*[,:on line\(]{1,9}\s*\d+\)?\:?(\d+)?"""
+LINK_REGX_SETTING  = r"""(["']?[\w\d\:\\\/\.\-\=]+\.\w+[\w\d]*["']?\s*[,:on line\(]{1,9}\s*\d+\)?\:?(\d+)?)"""
+LINK_REGX_RESULT   = r"""["']?([\w\d\:\\\/\.\-\=]+\.\w+[\w\d]*)["']?\s*[,:on line\(]{1,9}\s*(\d+)\:?(\d+)?"""
+LINK_REGX_RELPATH  = r"""["']?([\w\d\:\\\/\.\-\=]+\.\w+[\w\d]*)["']?\s*[,:on line\(]{1,9}\s*\d+\)?"""
+LINK_REGX_SUMMARY  = r"""(?:["']?[\w\d\:\\\/\.\-\=]+\.\w+[\w\d]*["']?\s*[,:on line\(]{1,9}\s*\d+\)?\:?(\d+)?)"""
+QUOTE_REGX_PLIST   = r"""(["'])(?:(?=(\\?))\2.)*?\1"""
+QUOTE_REGX_SETTING = r"""(["'].+?["'])"""
+QUOTE_REGX_SUMMARY = r"""(?:["'].+?["'])"""
+# to prevent re-run in short time
+IS_WORKING = False
+IS_WAITING = False
+# managing views
+LOGH_VIEW  = []
+LOGH_LASTV = -1
 
-##  global functions  _________________________________________
 
 def plugin_loaded():
-
-    if package_control_installed and (events.install('Log Highlight') or events.post_upgrade('Log Highlight')):
-        sublime.set_timeout_async(loaded, 1000)
-    else:
-        loaded()
-    return
-
-
-def plugin_unloaded():
-    if package_control_installed:
-        if events.remove('Log Highlight') or events.pre_upgrade('Log Highlight'):
-            lhs = get_prefs()
-            lhs.clear_on_change('lh-prefs')
-    return
+    loaded()
 
 
 def loaded():
-
     # default tmTheme
-    gen_tmtheme()
-
+    #gen_tmtheme()
     # update log extension/panel list
     get_log_extension()
-
     # register callback
     lhs = get_prefs()
     lhs.clear_on_change('lh-prefs')
     lhs.add_on_change('lh-prefs', get_log_extension)
-
     # check all log-highlited views
     check_logh_views()
-
-    return
 
 
 def get_prefs():
@@ -211,7 +185,7 @@ def get_severity_list(log_name):
 def check_syntax(view):
     syn = view.settings().get('syntax', '')
     if isinstance(syn, str):
-        if syn.endswith('-log.tmLanguage'):
+        if syn.endswith('.tmLanguage'):
             return True
         else:
             return False
@@ -219,80 +193,70 @@ def check_syntax(view):
         return False
 
 
-def gen_tmtheme():
-    etheme = os.path.join(sublime.packages_path(), 'User', 'Log Highlight', 'default.tmTheme')
-    if not os.path.exists(etheme):
-        uspath = os.path.join(sublime.packages_path(), 'User', 'Log Highlight')
-        if not os.path.exists(uspath):
-            os.makedirs(uspath)
-        otheme = sublime.load_resource('Packages/Log Highlight/Log Highlight.tmTheme')
-        uspath = os.path.join(sublime.packages_path(), 'User', 'Log Highlight', 'default.tmTheme')
-        fwrite(uspath, otheme)
+# def gen_tmtheme():
+#     etheme = os.path.join(sublime.packages_path(), 'User', 'Log Highlight', 'default.tmTheme')
+#     if not os.path.exists(etheme):
+#         uspath = os.path.join(sublime.packages_path(), 'User', 'Log Highlight')
+#         if not os.path.exists(uspath):
+#             os.makedirs(uspath)
+#         otheme = sublime.load_resource('Packages/Log Highlight/Log Highlight.tmTheme')
+#         uspath = os.path.join(sublime.packages_path(), 'User', 'Log Highlight', 'default.tmTheme')
+#         fwrite(uspath, otheme)
 
 
-def change_bgcolor(tmTheme, bgcolor):
-    tree = plistlib.readPlist(tmTheme)
-    tree['settings'][0]['settings']['background'] = bgcolor
-    plistlib.writePlist(tree, tmTheme)
+# def change_bgcolor(tmTheme, bgcolor):
+#     tree = plistlib.readPlist(tmTheme)
+#     tree['settings'][0]['settings']['background'] = bgcolor
+#     plistlib.writePlist(tree, tmTheme)
 
 
-def set_as_default_theme(view):
-    view.settings().set('color_scheme', 'Packages/User/Log Highlight/default.tmTheme')
+# def set_as_default_theme(view):
+#     view.settings().set('color_scheme', 'Packages/User/Log Highlight/default.tmTheme')
 
 
 def set_syntax_theme(view, log_name):
-    ltitle = log_name + '-log'
-    lsyntx = os.path.join(sublime.packages_path(), 'User', 'Log Highlight', ltitle + '.tmLanguage')
-    if os.path.exists(lsyntx):
-        view.set_syntax_file('Packages/User/Log Highlight/' + ltitle + '.tmLanguage')
-    else:
-        view.set_syntax_file('Packages/Log Highlight/Log Highlight.tmLanguage')
-    bgclr  = get_background()
-    etheme = os.path.join(sublime.packages_path(), 'User', 'Log Highlight', 'default.tmTheme')
-    ltheme = os.path.join(sublime.packages_path(), 'User', 'Log Highlight', ltitle + '.tmTheme')
-    if os.path.exists(ltheme):
-        change_bgcolor(ltheme, bgclr)
-        view.settings().set('color_scheme', 'Packages/User/Log Highlight/' + ltitle + '.tmTheme')
-    else:
-        if not os.path.exists(etheme):
-            gen_tmtheme()
-            change_bgcolor(etheme, bgclr)
-            sublime.set_timeout_async(lambda: set_as_default_theme(view), 0)
-        else:
-            change_bgcolor(etheme, bgclr)
-            set_as_default_theme(view)
+    syntax = os.path.join(sublime.packages_path(), 'SyntaxLog', 'Log Highlight.tmLanguage')
+    view.set_syntax_file(syntax)
+    # bgclr  = get_background()
+    # etheme = os.path.join(sublime.packages_path(), 'User', 'Log Highlight', 'default.tmTheme')
+    # ltheme = os.path.join(sublime.packages_path(), 'User', 'Log Highlight', ltitle + '.tmTheme')
+    # if os.path.exists(ltheme):
+    #     change_bgcolor(ltheme, bgclr)
+    #     view.settings().set('color_scheme', 'Packages/User/Log Highlight/' + ltitle + '.tmTheme')
+    # else:
+    #     if not os.path.exists(etheme):
+    #         gen_tmtheme()
+    #         change_bgcolor(etheme, bgclr)
+    #         sublime.set_timeout_async(lambda: set_as_default_theme(view), 0)
+    #     else:
+    #         change_bgcolor(etheme, bgclr)
+    #set_as_default_theme(view)
 
 
-def fwrite(fname, text):
-    try:
-        with open(fname, "w", newline="") as f:
-            f.write(text)
-    except Exception:
-        disp_exept()
+# def fwrite(fname, text):
+#     try:
+#         with open(fname, "w", newline="") as f:
+#             f.write(text)
+#     except Exception:
+#         disp_exept()
 
 
-def fread(fname):
-    text = ""
-    try:
-        with open(fname, "r") as f:
-            text = str(f.read())
-    except Exception:
-        disp_exept()
-        return text
+# def fread(fname):
+#     text = ""
+#     try:
+#         with open(fname, "r") as f:
+#             text = str(f.read())
+#     except Exception:
+#         disp_exept()
+#         return text
 
 
 def disp_msg(msg):
-    if guna_installed:
-        GunaApi.info_message(24, ' Log Highlight : ' + msg, 5, 1)
-    else:
-        sublime.status_message(' Log Highlight : ' + msg)
+    sublime.status_message(' Log Highlight : ' + msg)
 
 
 def disp_error(msg):
-    if guna_installed:
-        GunaApi.alert_message(3, ' Log Highlight : ' + msg, 10, 1)
-    else:
-        sublime.status_message(' Log Highlight : ' + msg)
+    sublime.status_message(' Log Highlight : ' + msg)
 
 
 def disp_exept():
@@ -302,295 +266,26 @@ def disp_exept():
     disp_error("Error is occured. Please, see the trace-back information in Python console.")
 
 
-##  class LogHighlightGenSyntaxThemeCommand  __________________
-
-# regular expresson constants
-
-LINK_REGX_PLIST    = r"""["']?[\w\d\:\\\/\.\-\=]+\.\w+[\w\d]*["']?\s*[,:on line\(]{1,9}\s*\d+\)?\:?(\d+)?"""
-LINK_REGX_SETTING  = r"""(["']?[\w\d\:\\\/\.\-\=]+\.\w+[\w\d]*["']?\s*[,:on line\(]{1,9}\s*\d+\)?\:?(\d+)?)"""
-LINK_REGX_RESULT   = r"""["']?([\w\d\:\\\/\.\-\=]+\.\w+[\w\d]*)["']?\s*[,:on line\(]{1,9}\s*(\d+)\:?(\d+)?"""
-LINK_REGX_RELPATH  = r"""["']?([\w\d\:\\\/\.\-\=]+\.\w+[\w\d]*)["']?\s*[,:on line\(]{1,9}\s*\d+\)?"""
-LINK_REGX_SUMMARY  = r"""(?:["']?[\w\d\:\\\/\.\-\=]+\.\w+[\w\d]*["']?\s*[,:on line\(]{1,9}\s*\d+\)?\:?(\d+)?)"""
-
-QUOTE_REGX_PLIST   = r"""(["'])(?:(?=(\\?))\2.)*?\1"""
-QUOTE_REGX_SETTING = r"""(["'].+?["'])"""
-QUOTE_REGX_SUMMARY = r"""(?:["'].+?["'])"""
-
-
-class LogHighlightGenSyntaxThemeCommand(sublime_plugin.TextCommand):
-
-    def run(self, edit):
-        lgl = list(get_prefs().get('log_list').keys())
-        for e in lgl:
-            svt, svl = get_severity_list(e)
-            self.gen_syntax(e, svt, svl)
-            self.gen_theme(e, svt, svl)
-        disp_msg(" syntax / theme files are generated")
-
-    def gen_syntax(self, log_name, severity_dict, severity_list):
-        sub_pattern    = ''
-        sub_link_quote = ''
-        for i, k in enumerate(severity_list):
-            sub_pattern    += self.gen_syntax_sub_pattern(severity_dict, k)
-            sub_link_quote += self.gen_syntax_sub_link_quote(k)
-
-        _tmlang = """<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>fileTypes</key>
-    <array/>
-    <key>name</key>
-    <string>Log Highlight - """ + log_name + """</string>
-    <key>patterns</key>
-    <array>"""
-        _tmlang = _tmlang + sub_pattern
-        _tmlang = _tmlang + """
-    </array>
-    <key>repository</key>
-    <dict>"""
-        _tmlang = _tmlang + sub_link_quote
-        _tmlang = _tmlang + """
-    </dict>
-    <key>scopeName</key>
-    <string>source.loghighlight.""" + log_name + """</string>
-    <key>uuid</key>
-    <string>0ed2482c-a94a-49dc-9aae-b1401bcff2e0</string>
-</dict>
-</plist>
-"""
-        _user_path   = os.path.join(sublime.packages_path(), 'User', 'Log Highlight')
-        if not os.path.exists(_user_path):
-            os.makedirs(_user_path)
-        _tmlang_path = os.path.join(_user_path, log_name + '-log.tmLanguage')
-        fwrite(_tmlang_path, _tmlang)
-        return
-
-    def gen_syntax_sub_pattern(self, severity_dict, severity):
-        pat = (severity_dict.get(severity)).get('pattern')
-        pat_tmlang = ""
-        for _str in pat:
-            _str[0] = self.conv_for_plist(_str[0])
-            _str[1] = self.conv_for_plist(_str[1])
-            if _str[1] != "":
-                pat_tmlang = pat_tmlang + """
-        <dict>
-            <key>begin</key>
-            <string>""" + self.conv_for_regx(_str[0]) + """</string>""" + self.gen_syntax_sub_capture(_str[0], severity, 0) + """
-            <key>end</key>
-            <string>""" + self.conv_for_regx(_str[1]) + """</string>""" + self.gen_syntax_sub_capture(_str[1], severity, 1)
-            else:
-                pat_tmlang = pat_tmlang + """
-        <dict>
-            <key>match</key>
-            <string>""" + self.conv_for_regx(_str[0]) + """</string>""" + self.gen_syntax_sub_capture(_str[0], severity, 2)
-            pat_tmlang = pat_tmlang + """
-            <key>name</key>
-            <string>msg.""" + severity + """</string>
-            <key>patterns</key>
-            <array>
-                <dict>
-                    <key>include</key>
-                    <string>#""" + severity + """_link</string>
-                </dict>
-                <dict>
-                    <key>include</key>
-                    <string>#""" + severity + """_quote</string>
-                </dict>
-            </array>
-        </dict>"""
-        return pat_tmlang
-
-    def gen_syntax_sub_capture(self, regx, severity, sel):
-        spw  = re.compile(r'\{\{\{LINK\}\}\}|\{\{\{QUOTE\}\}\}').findall(regx)
-        if len(spw) == 0:
-            return ""
-        if sel == 0:
-            ret = """
-            <key>beginCaptures</key>
-            <dict>"""
-        elif sel == 1:
-            ret = """
-            <key>endCaptures</key>
-            <dict>"""
-        else:
-            ret = """
-            <key>captures</key>
-            <dict>"""
-        lqs = ""
-        for i, _str in enumerate(spw):
-            if _str == r'{{{LINK}}}':
-                lqs = "link"
-            elif _str == r'{{{QUOTE}}}':
-                lqs = "quote"
-            ret = ret + """
-                <key>""" + str(i+1) + """</key>
-                <dict>
-                    <key>name</key>
-                    <string>msg.""" + severity + """.""" + lqs + """</string>
-                </dict>"""
-        ret = ret + """
-            </dict>"""
-        return ret
-
-    def gen_syntax_sub_link_quote(self, severity):
-        lq_tmlang = """
-        <key>""" + severity + """_link</key>
-        <dict>
-            <key>match</key>
-            <string>""" + LINK_REGX_PLIST + """</string>
-            <key>name</key>
-            <string>msg.""" + severity + """.link</string>
-        </dict>
-        <key>""" + severity + """_quote</key>
-        <dict>
-            <key>match</key>
-            <string>""" + QUOTE_REGX_PLIST + """</string>
-            <key>name</key>
-            <string>msg.""" + severity + """.quote</string>
-        </dict>"""
-        return lq_tmlang
-
-    def conv_for_plist(self, _str):
-        _str = re.sub('\<', '&lt;', _str)
-        _str = re.sub('\>', '&gt;', _str)
-        return _str
-
-    def conv_for_regx(self, _str):
-        _str = re.sub(r'\{\{\{LINK\}\}\}', LINK_REGX_SETTING, _str)
-        _str = re.sub(r'\{\{\{QUOTE\}\}\}', QUOTE_REGX_SETTING, _str)
-        return _str
-
-    def gen_theme(self, log_name, severity_dict, severity_list):
-        sub_theme = ''
-        for i, k in enumerate(severity_list):
-            for j, c in enumerate(list((severity_dict.get(k)).get('color'))):
-                p = '' if c == 'base' else '.' + c
-                v = ((severity_dict.get(k)).get('color')).get(c)
-                if isinstance(v, list):
-                    fgclr = """
-                <key>foreground</key>
-                <string>""" + v[0] + """</string>"""
-                    if v[1] != "":
-                        bgclr = """
-                <key>background</key>
-                <string>""" + v[1] + """</string>"""
-                    else:
-                        bgclr = ''
-                else:
-                    fgclr = '<key>foreground</key><string>' + v + '</string>'
-                    bgclr = ''
-                sub_theme += """
-        <dict>
-            <key>scope</key>
-            <string>msg.""" + k + p + """</string>
-            <key>settings</key>
-            <dict>""" + fgclr + bgclr + """
-            </dict>
-        </dict>"""
-
-        bgclr = get_background()
-        theme_color = get_prefs().get('log_list').get(log_name).get('theme')
-        _tmtheme = """<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple //DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>name</key>
-    <string>Log Highlight - """ + log_name + """</string>
-    <key>settings</key>
-    <array>
-        <dict>
-            <key>settings</key>
-            <dict>
-                <key>background</key>
-                <string>""" + bgclr + """</string>
-                <key>caret</key>
-                <string>""" + theme_color.get('caret') + """</string>
-                <key>foreground</key>
-                <string>""" + theme_color.get('foreground') + """</string>
-                <key>lineHighlight</key>
-                <string>""" + theme_color.get('lineHighlight') + """</string>
-                <key>selection</key>
-                <string>""" + theme_color.get('selection') + """</string>
-                <key>selectionBorder</key>
-                <string>""" + theme_color.get('selectionBorder') + """</string>
-            </dict>
-        </dict>"""
-        _tmtheme = _tmtheme + sub_theme
-        _tmtheme = _tmtheme + """
-    </array>
-    <key>uuid</key>
-    <string>403e2150-aad4-41ff-86d0-36d87510918e</string>
-</dict>
-</plist>
-"""
-        _user_path   = os.path.join(sublime.packages_path(), 'User', 'Log Highlight')
-        if not os.path.exists(_user_path):
-            os.makedirs(_user_path)
-        _tmtheme_path = os.path.join(_user_path, log_name + '-log.tmTheme')
-        fwrite(_tmtheme_path, _tmtheme)
-        return
-
-
-##  class LogHighlightEraseSyntaxThemeCommand  __________
-
-class LogHighlightEraseSyntaxThemeCommand(sublime_plugin.TextCommand):
-
-    def run(self, edit):
-        ret = sublime.ok_cancel_dialog('Erase Log Highlight Syntax & Theme ?')
-        if ret:
-            try:
-                winsl = sublime.windows()
-                for w in winsl:
-                    viewl = w.views()
-                    for v in viewl:
-                        if check_syntax(v):
-                            v.set_syntax_file('Packages/Log Highlight/Log Highlight.tmLanguage')
-                            v.settings().set('color_scheme', 'Packages/Log Highlight/Log Highlight.tmTheme')
-                upath = os.path.join(sublime.packages_path(), 'User', 'Log Highlight')
-                if os.path.exists(upath):
-                    shutil.rmtree(upath)
-            except Exception:
-                disp_exept()
-        return
-
-##  Log Highlight  ____________________________________________
-
-# to prevent re-run in short time
-IS_WORKING = False
-IS_WAITING = False
-
-# managing views
-LOGH_VIEW  = []
-LOGH_LASTV = -1
-
-##  class LogHighlightCommand  ________________________________
-
 class LogHighlightCommand(sublime_plugin.TextCommand):
 
     def run(self, edit):
-
         lname = self.view.settings().get('log_name')
         if not lname:
             lname = get_log_name(self.view)
             self.view.settings().set('log_name', lname)
             if not lname:
                 return
-
         ltype = get_log_property(lname, 'type', 'system')
         if isinstance(ltype, str) and ltype == 'system':
             set_syntax_theme(self.view, lname)
             return
-
         # workaround for ST3 result_file_regex bug
         ulink = get_log_property(lname, 'use_link', True)
         if ulink:
             self.view.settings().set('result_file_regex', LINK_REGX_RESULT)
-
         global IS_WORKING
         if IS_WORKING:
             return
-
         lthread = LogHighlightThread(self.view, True)
         lthread.start()
 
@@ -606,8 +301,6 @@ class LogHighlightCommand(sublime_plugin.TextCommand):
         except Exception:
             return False
 
-
-##  class LogHighlightEvent  __________________________________
 
 class LogHighlightEvent(sublime_plugin.EventListener):
 
@@ -673,7 +366,6 @@ class LogHighlightEvent(sublime_plugin.EventListener):
             view.run_command("log_highlight")
         return
 
-##  class LogHighlightRefreshThread  __________________________
 
 class LogHighlightRefreshThread(threading.Thread):
 
@@ -712,7 +404,6 @@ class LogHighlightRefreshThread(threading.Thread):
                 break
         return
 
-##  class LogHighlightThread  _________________________________
 
 class LogHighlightThread(threading.Thread):
 
@@ -741,7 +432,6 @@ class LogHighlightThread(threading.Thread):
         panel = self.view.settings().get('panel')
         if not lname:
             return
-
         if panel == 'exec':
             ulink = False
             sbase = False
@@ -749,7 +439,6 @@ class LogHighlightThread(threading.Thread):
             ulink = get_log_property(lname, 'use_link', True)
             sropt = get_log_property(lname, 'search_base', [])
             sbase = sropt.get('enable', True)
-
         # to support unsaved file (like Tail)
         if not vname:
             vname = self.view.settings().get('filepath', '')
@@ -757,14 +446,11 @@ class LogHighlightThread(threading.Thread):
             self.view.settings().set('floating', True)
         else:
             self.view.settings().set('floating', False)
-
         self.base_dir = ''
         self.try_search_base = False
-
         if self.is_first or self.view.file_name() is None:
             set_syntax_theme(self.view, lname)
             self.view.settings().set("always_prompt_for_file_reload", False)
-
         if self.is_first:
             global LOGH_VIEW
             if not any(self.view.id() == vid[0] for vid in LOGH_VIEW):
@@ -792,7 +478,6 @@ class LogHighlightThread(threading.Thread):
             self.bookmark(lname)
             IS_WORKING = False
             return
-
         if ulink:
             self.view.settings().set('result_file_regex', LINK_REGX_RESULT)
         if ulink and sbase:
@@ -802,7 +487,6 @@ class LogHighlightThread(threading.Thread):
             # set base dir & apply 'result_file_regex'
             if self.base_dir != "":
                 self.view.settings().set('result_base_dir', self.base_dir)
-
         # bookmark
         self.bookmark(lname)
         IS_WORKING = False
@@ -874,7 +558,6 @@ class LogHighlightThread(threading.Thread):
         self.base_dir = ''
         if file_name == '':
             return
-
         excludes  = sropt.get('ignore_dir', [])
         max_scan  = sropt.get('max_scan_path', MAX_SCAN_PATH)
         old_path  = ['', 0]
@@ -929,15 +612,12 @@ class LogHighlightThread(threading.Thread):
                         else:
                             new_path = [_path, _depth]
             pass
-
         except Exception:
             disp_exept()
-
         if found:
             sublime.status_message("Log Highlight : Found base directory (" + str(scan_path) + ") - [" + self.base_dir + " ]")
         else:
             sublime.status_message("Log Highlight : Fail to find (" + str(scan_path) + ") - " + file_name)
-
         self.search_base_success = found
         return
 
@@ -978,7 +658,7 @@ class LogHighlightThread(threading.Thread):
                     icon = icon
                     scpe = 'msg.' + k
                 else:
-                    icon = "Packages/Log Highlight/icons/" + icon
+                    icon = "Packages/SyntaxLog/icons/" + icon
                     scpe = 'bookmark'
                 view.add_regions(k, self.regions[k], scpe, icon, sublime.HIDDEN | sublime.PERSISTENT)
             for r in self.regions[k]:
@@ -993,8 +673,6 @@ class LogHighlightThread(threading.Thread):
         return _str
 
 
-##  class LogHighlightSetAsBaseCommand  _______________________
-
 class LogHighlightSetAsBaseCommand(sublime_plugin.TextCommand):
 
     def run(self, edit, **args):
@@ -1002,7 +680,6 @@ class LogHighlightSetAsBaseCommand(sublime_plugin.TextCommand):
             path = args.get('paths', [])[0]
             if os.path.isfile(path):
                 path = os.path.dirname(path)
-
             view = sublime.active_window().active_view()
             if check_syntax(view):
                 disp_msg('base directory of current log is set as : ' + path)
@@ -1014,7 +691,6 @@ class LogHighlightSetAsBaseCommand(sublime_plugin.TextCommand):
                 proj = view.window().project_file_name()
                 pdir = os.path.dirname(proj)
                 rpth = os.path.relpath(path, pdir)
-
                 if proj != "":
                     pdata = view.window().project_data()
                     pdata['base_dir'] = rpth
