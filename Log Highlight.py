@@ -673,7 +673,7 @@ class LogHighlightThread(threading.Thread):
         return _str
 
 
-class LogHighlightSetAsBaseCommand(sublime_plugin.TextCommand):
+class LogHighlightSetAsBaseCommand(sublime_plugin.WindowCommand):
 
     def run(self, edit, **args):
         try:
@@ -695,7 +695,5 @@ class LogHighlightSetAsBaseCommand(sublime_plugin.TextCommand):
                     pdata = view.window().project_data()
                     pdata['base_dir'] = rpth
                     view.window().set_project_data(pdata)
-            pass
-
         except Exception:
             disp_exept()
